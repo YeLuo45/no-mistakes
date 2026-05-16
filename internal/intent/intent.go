@@ -33,7 +33,8 @@ type ExtractParams struct {
 	HeadTime time.Time
 	// SlackDays extends WindowStart backwards. The plan called for 3 days.
 	SlackDays int
-	// Threshold is the minimum file-overlap score required to accept a match.
+	// Threshold is the minimum raw file-overlap score required before applying
+	// stricter multi-file and stale-partial acceptance rules.
 	Threshold float64
 	// Readers are the per-agent transcript readers to consult. Order is
 	// insignificant; matching picks the best score across all of them.
@@ -42,6 +43,8 @@ type ExtractParams struct {
 	Cache Cache
 	// Summarizer turns the chosen session's text into a short summary.
 	Summarizer Summarizer
+	// Logf receives best-effort candidate diagnostics. Nil disables logging.
+	Logf func(format string, args ...any)
 }
 
 // ErrNoMatch indicates no agent transcript matched the change. Callers
@@ -49,8 +52,8 @@ type ExtractParams struct {
 var ErrNoMatch = errors.New("intent: no matching transcript")
 
 // Extract runs the discover -> match -> cache -> summarize pipeline and
-// returns the final intent. It returns ErrNoMatch when nothing scored
-// above the threshold.
+// returns the final intent. It returns ErrNoMatch when no session satisfies
+// the matcher's threshold, overlap, and freshness acceptance rules.
 func Extract(ctx context.Context, p ExtractParams) (*Result, error) {
 	if p.OriginCWD == "" {
 		return nil, fmt.Errorf("intent: OriginCWD is required")
@@ -116,7 +119,11 @@ func Extract(ctx context.Context, p ExtractParams) (*Result, error) {
 		loaded = append(loaded, s)
 	}
 
-	match := pickMatch(loaded, p.DiffFiles, p.Threshold)
+	match := pickMatchWithOptions(loaded, p.DiffFiles, matchOptions{
+		Threshold: p.Threshold,
+		HeadTime:  p.HeadTime,
+		Logf:      p.Logf,
+	})
 	if match == nil {
 		return nil, ErrNoMatch
 	}
